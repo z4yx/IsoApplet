@@ -35,7 +35,6 @@ import javacard.security.ECKey;
 import javacard.security.ECPublicKey;
 import javacard.security.ECPrivateKey;
 import javacardx.crypto.Cipher;
-import javacardx.apdu.ExtendedLength;
 import javacard.security.CryptoException;
 import javacard.security.Signature;
 import javacard.security.RandomData;
@@ -52,7 +51,7 @@ import javacard.security.RandomData;
  *
  * \author Philip Wendland
  */
-public class IsoApplet extends Applet implements ExtendedLength {
+public class IsoApplet extends Applet {
     /* API Version */
     public static final byte API_VERSION_MAJOR = (byte) 0x00;
     public static final byte API_VERSION_MINOR = (byte) 0x06;
@@ -60,6 +59,8 @@ public class IsoApplet extends Applet implements ExtendedLength {
     /* Card-specific configuration */
     public static final boolean DEF_EXT_APDU = false;
     public static final boolean DEF_PRIVATE_KEY_IMPORT_ALLOWED = false;
+
+    public final static short SW_COMMAND_CHAINING_NOT_SUPPORTED = 0x6884;
 
     /* ISO constants not in the "ISO7816" interface */
     // File system related INS:
@@ -152,6 +153,15 @@ public class IsoApplet extends Applet implements ExtendedLength {
     private RandomData randomData = null;
     private byte api_features;
 
+    // works without ExtendedAPDU
+    protected byte getOffsetCdata() {
+        return 5;
+    }
+
+    // works without ExtendedAPDU
+    protected byte getIncomingLength(byte[] buf) {
+        return buf[4];
+    }
 
     /**
      * \brief Installs this applet.
@@ -252,6 +262,7 @@ public class IsoApplet extends Applet implements ExtendedLength {
      */
     public void process(APDU apdu) {
         byte buffer[] = apdu.getBuffer();
+        byte cla = buffer[ISO7816.OFFSET_CLA];
         byte ins = buffer[ISO7816.OFFSET_INS];
 
         // Return the API version if we are being selected.
@@ -268,9 +279,9 @@ public class IsoApplet extends Applet implements ExtendedLength {
         }
 
         // No secure messaging at the moment
-        if(apdu.isSecureMessagingCLA()) {
-            ISOException.throwIt(ISO7816.SW_SECURE_MESSAGING_NOT_SUPPORTED);
-        }
+        // if(apdu.isSecureMessagingCLA()) {
+        //     ISOException.throwIt(ISO7816.SW_SECURE_MESSAGING_NOT_SUPPORTED);
+        // }
 
         // Command chaining checks
         if(ram_chaining_cache[RAM_CHAINING_CACHE_OFFSET_CURRENT_INS] != 0 || isCommandChainingCLA(apdu)) {
@@ -286,7 +297,7 @@ public class IsoApplet extends Applet implements ExtendedLength {
                     (ins != INS_PERFORM_SECURITY_OPERATION
                      && ins != INS_GENERATE_ASYMMETRIC_KEYPAIR
                      && ins != INS_PUT_DATA)) {
-                ISOException.throwIt(ISO7816.SW_COMMAND_CHAINING_NOT_SUPPORTED);
+                ISOException.throwIt(SW_COMMAND_CHAINING_NOT_SUPPORTED);
             }
 
             if(ram_chaining_cache[RAM_CHAINING_CACHE_OFFSET_CURRENT_INS] == 0
@@ -314,7 +325,7 @@ public class IsoApplet extends Applet implements ExtendedLength {
             ISOException.throwIt(SW_COMMAND_NOT_ALLOWED_GENERAL);
         }
 
-        if(apdu.isISOInterindustryCLA()) {
+        if((cla & (byte)0x80) == 0/* apdu.isISOInterindustryCLA() */) {
             switch (ins) {
             case ISO7816.INS_SELECT:
                 fs.processSelectFile(apdu);
@@ -405,10 +416,10 @@ public class IsoApplet extends Applet implements ExtendedLength {
 
         // Bytes received must be Lc.
         lc = apdu.setIncomingAndReceive();
-        if(lc != apdu.getIncomingLength()) {
+        if(lc != getIncomingLength(buf)) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        offset_cdata = apdu.getOffsetCdata();
+        offset_cdata = getOffsetCdata();
 
         // Lc might be 0, in this case the caller checks if verification is required.
         if((lc > 0 && (lc < PIN_MIN_LENGTH) || lc > PIN_MAX_LENGTH)) {
@@ -460,10 +471,10 @@ public class IsoApplet extends Applet implements ExtendedLength {
 
         // Bytes received must be Lc.
         lc = apdu.setIncomingAndReceive();
-        if(lc != apdu.getIncomingLength()) {
+        if(lc != getIncomingLength(buf)) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        offset_cdata = apdu.getOffsetCdata();
+        offset_cdata = getOffsetCdata();
 
         if(state == STATE_CREATION) {
             // We _set_ the PUK or the PIN. If we set the PIN in this state, no PUK will be present on the card, ever.
@@ -572,10 +583,10 @@ public class IsoApplet extends Applet implements ExtendedLength {
 
         // Bytes received must be Lc.
         lc = apdu.setIncomingAndReceive();
-        if(lc != apdu.getIncomingLength()) {
+        if(lc != getIncomingLength(buf)) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        offset_cdata = apdu.getOffsetCdata();
+        offset_cdata = getOffsetCdata();
 
         // Length of data field.
         if(lc < (short)(PUK_LENGTH + PIN_MIN_LENGTH)
@@ -710,7 +721,7 @@ public class IsoApplet extends Applet implements ExtendedLength {
 
             // Command chaining might be used for ECC, but not for RSA.
             if(isCommandChainingCLA(apdu)) {
-                ISOException.throwIt(ISO7816.SW_COMMAND_CHAINING_NOT_SUPPORTED);
+                ISOException.throwIt(SW_COMMAND_CHAINING_NOT_SUPPORTED);
             }
             try {
                 kp = new KeyPair(KeyPair.ALG_RSA_CRT, KeyBuilder.LENGTH_RSA_2048);
@@ -840,7 +851,19 @@ public class IsoApplet extends Applet implements ExtendedLength {
         pos += key.getModulus(ram_buf, pos);
         ram_buf[pos++] = (byte) 0x82; // RSA public key exponent tag.
         ram_buf[pos++] = (byte) 0x03; // Length: 3 Bytes.
-        pos += key.getExponent(ram_buf, pos);
+        short expLen = key.getExponent(ram_buf, pos);
+        if (expLen == (short)3)
+            pos += (short)3;
+        else if (expLen == (short)4 && ram_buf[pos] == (byte)0) {
+            ram_buf[pos] = ram_buf[(short)(pos + (short)1)];
+            pos++;
+            ram_buf[pos] = ram_buf[(short)(pos + (short)1)];
+            pos++;
+            ram_buf[pos] = ram_buf[(short)(pos + (short)1)];
+            pos++;
+        } else {
+            ISOException.throwIt(ISO7816.SW_FUNC_NOT_SUPPORTED);
+        }
 
         sendLargeData(apdu, (short)0, pos);
     }
@@ -1061,10 +1084,10 @@ public class IsoApplet extends Applet implements ExtendedLength {
 
         // Bytes received must be Lc.
         lc = apdu.setIncomingAndReceive();
-        if(lc != apdu.getIncomingLength()) {
+        if(lc != getIncomingLength(buf)) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        offset_cdata = apdu.getOffsetCdata();
+        offset_cdata = getOffsetCdata();
 
         // TLV structure consistency check.
         if( ! UtilTLV.isTLVconsistent(buf, offset_cdata, lc)) {
@@ -1312,10 +1335,10 @@ public class IsoApplet extends Applet implements ExtendedLength {
             // Receive.
             // Bytes received must be Lc.
             lc = apdu.setIncomingAndReceive();
-            if(lc != apdu.getIncomingLength()) {
+            if(lc != getIncomingLength(buf)) {
                 ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
             }
-            offset_cdata = apdu.getOffsetCdata();
+            offset_cdata = getOffsetCdata();
 
             // RSA signature operation.
             RSAPrivateCrtKey rsaKey = (RSAPrivateCrtKey) keys[currentPrivateKeyRef[0]];
@@ -1356,7 +1379,7 @@ public class IsoApplet extends Applet implements ExtendedLength {
             }
 
             short recvLen = apdu.setIncomingAndReceive();
-            offset_cdata = apdu.getOffsetCdata();
+            offset_cdata = getOffsetCdata();
 
             // Receive data. For extended APDUs, the data is received piecewise
             // and aggregated in the hash. When using short APDUs, command
@@ -1515,7 +1538,7 @@ public class IsoApplet extends Applet implements ExtendedLength {
     private short doChainingOrExtAPDU(APDU apdu) throws ISOException {
         byte[] buf = apdu.getBuffer();
         short recvLen = apdu.setIncomingAndReceive();
-        short offset_cdata = apdu.getOffsetCdata();
+        short offset_cdata = getOffsetCdata();
 
         // Receive data (short or extended).
         while (recvLen > 0) {

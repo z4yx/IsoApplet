@@ -48,6 +48,15 @@ public class IsoFileSystem extends DedicatedFile {
     short currentRecordNum;
     private boolean[] isUserAuthenticated = null;
 
+    // works without ExtendedAPDU
+    protected byte getOffsetCdata() {
+        return 5;
+    }
+
+    // works without ExtendedAPDU
+    protected byte getIncomingLength(byte[] buf) {
+        return buf[4];
+    }
 
     /**
      * \brief Instantiate a new ISO 7816 compliant IsoFileSystem.
@@ -521,10 +530,10 @@ public class IsoFileSystem extends DedicatedFile {
 
         // Bytes received must be Lc.
         lc = apdu.setIncomingAndReceive();
-        if(lc != apdu.getIncomingLength()) {
+        if(lc != getIncomingLength(buf)) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        offset_cdata = apdu.getOffsetCdata();
+        offset_cdata = getOffsetCdata();
 
         // Select the file.
         switch(p1) {
@@ -739,7 +748,7 @@ public class IsoFileSystem extends DedicatedFile {
 
         // Bytes received must be Lc.
         recvLen = apdu.setIncomingAndReceive();
-        lc = apdu.getIncomingLength();
+        lc = getIncomingLength(buf);
 
         // Check P1 and P2.
         short offsetFile = -1; // offset in data in EF
@@ -776,7 +785,7 @@ public class IsoFileSystem extends DedicatedFile {
         // Update file.
         if(((short) efTr.getData().length >= (short) (offsetFile+lc)) // Check for data array overflow/out-of-bounds.
                 && ((short) ((short)32767-offsetFile) >= lc)) { // Check for possible short overflow.
-            short offsetCdata = apdu.getOffsetCdata();
+            short offsetCdata = getOffsetCdata();
             while(recvLen > 0) {
                 Util.arrayCopy(buf, offsetCdata, efTr.getData(), offsetFile, recvLen);
                 offsetFile += recvLen;
@@ -833,10 +842,10 @@ public class IsoFileSystem extends DedicatedFile {
 
         // Bytes received must be Lc.
         lc = apdu.setIncomingAndReceive();
-        if(lc != apdu.getIncomingLength()) {
+        if(lc != getIncomingLength(buf)) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        offset_cdata = apdu.getOffsetCdata();
+        offset_cdata = getOffsetCdata();
 
         // One FID in DATA.
         if(lc != 2) {
@@ -904,10 +913,10 @@ public class IsoFileSystem extends DedicatedFile {
 
         // Bytes received must be Lc.
         lc = apdu.setIncomingAndReceive();
-        if(lc != apdu.getIncomingLength()) {
+        if(lc != getIncomingLength(buf)) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
-        offset_cdata = apdu.getOffsetCdata();
+        offset_cdata = getOffsetCdata();
 
         try {
             // Add the file to the filesystem and select it.
