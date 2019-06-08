@@ -183,7 +183,6 @@ public class IsoApplet extends Applet {
     protected IsoApplet() {
         api_features = 0;
         pin = new OwnerPIN(PIN_MAX_TRIES, PIN_MAX_LENGTH);
-        puk = new OwnerPIN(PUK_MAX_TRIES, PUK_LENGTH);
         fs = new IsoFileSystem();
         ram_buf = JCSystem.makeTransientByteArray(RAM_BUF_SIZE, JCSystem.CLEAR_ON_DESELECT);
         ram_chaining_cache = JCSystem.makeTransientShortArray(RAM_CHAINING_CACHE_SIZE, JCSystem.CLEAR_ON_DESELECT);
@@ -234,7 +233,9 @@ public class IsoApplet extends Applet {
      */
     public void deselect() {
         pin.reset();
-        puk.reset();
+        if(puk != null) {
+            puk.reset();
+        }
         fs.setUserAuthenticated(false);
     }
 
@@ -492,6 +493,7 @@ public class IsoApplet extends Applet {
                 }
 
                 // Set PUK
+                puk = new OwnerPIN(PUK_MAX_TRIES, PUK_LENGTH);
                 puk.update(buf, offset_cdata, (byte)lc);
                 puk.resetAndUnblock();
 
@@ -600,17 +602,19 @@ public class IsoApplet extends Applet {
         }
 
         // Check the PUK.
-        if(!puk.check(buf, offset_cdata, PUK_LENGTH)) {
+        if(puk == null) {
+            ISOException.throwIt(SW_PIN_TRIES_REMAINING);
+        } else if (!puk.check(buf, offset_cdata, PUK_LENGTH)) {
             ISOException.throwIt((short)(SW_PIN_TRIES_REMAINING | puk.getTriesRemaining()));
+        } else {
+            // If we're here, the PUK was correct.
+            // Pad the new PIN, if not done by caller. We don't want any gargabe from the APDU buffer to be part of the new PIN.
+            Util.arrayFillNonAtomic(buf, (short)(offset_cdata + lc), (short)(PUK_LENGTH + PIN_MAX_LENGTH - lc), (byte) 0x00);
+
+            // Set the PIN.
+            pin.update(buf, (short)(offset_cdata+PUK_LENGTH), PIN_MAX_LENGTH);
+            pin.resetAndUnblock();
         }
-
-        // If we're here, the PUK was correct.
-        // Pad the new PIN, if not done by caller. We don't want any gargabe from the APDU buffer to be part of the new PIN.
-        Util.arrayFillNonAtomic(buf, (short)(offset_cdata + lc), (short)(PUK_LENGTH + PIN_MAX_LENGTH - lc), (byte) 0x00);
-
-        // Set the PIN.
-        pin.update(buf, (short)(offset_cdata+PUK_LENGTH), PIN_MAX_LENGTH);
-        pin.resetAndUnblock();
     }
 
     /**
